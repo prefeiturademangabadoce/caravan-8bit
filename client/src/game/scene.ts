@@ -8,9 +8,6 @@ import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
-import { Effect } from "@babylonjs/core/Materials/effect";
-import { PostProcess } from "@babylonjs/core/PostProcesses/postProcess";
-import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { GameWorld } from "./GameWorld";
 
 export interface GameHandle {
@@ -18,29 +15,10 @@ export interface GameHandle {
   dispose(): void;
 }
 
-Effect.ShadersStore.caravanDitherFragmentShader = `
-  precision highp float;
-  varying vec2 vUV;
-  uniform sampler2D textureSampler;
-  uniform vec2 screenSize;
-  float bayer(vec2 p) {
-    vec2 q = mod(floor(p), 4.0);
-    float i = q.x + q.y * 4.0;
-    float values[16];
-    values[0]=0.0; values[1]=8.0; values[2]=2.0; values[3]=10.0;
-    values[4]=12.0; values[5]=4.0; values[6]=14.0; values[7]=6.0;
-    values[8]=3.0; values[9]=11.0; values[10]=1.0; values[11]=9.0;
-    values[12]=15.0; values[13]=7.0; values[14]=13.0; values[15]=5.0;
-    return values[int(i)] / 16.0;
-  }
-  void main(void) {
-    vec2 steppedUv = floor(vUV * screenSize / 2.0) * 2.0 / screenSize;
-    vec4 color = texture2D(textureSampler, steppedUv);
-    float noise = (bayer(gl_FragCoord.xy) - 0.5) / 18.0;
-    color.rgb = floor(clamp(color.rgb + noise, 0.0, 1.0) * 7.0) / 7.0;
-    gl_FragColor = color;
-  }
-`;
+// The scene intentionally avoids a custom post-process shader here. The imported GitHub
+// shader was not compatible with the preview’s WebGL compiler; low-resolution geometry,
+// nearest-neighbor terrain, and CSS pixelation preserve the intended period look safely.
+
 
 export async function createGameScene(engine: Engine, _canvas: HTMLCanvasElement): Promise<GameHandle> {
   const scene = new Scene(engine);
@@ -75,18 +53,6 @@ export async function createGameScene(engine: Engine, _canvas: HTMLCanvasElement
   fill.intensity = 0.72;
 
   const world = new GameWorld(scene);
-  const post = new PostProcess(
-    "caravan-dither",
-    "caravanDither",
-    ["screenSize"],
-    null,
-    1.0,
-    camera,
-    Texture.NEAREST_SAMPLINGMODE,
-    engine,
-  );
-  post.onApply = (effect) => effect.setFloat2("screenSize", engine.getRenderWidth(), engine.getRenderHeight());
-
   const resizeObserver = () => setFrustum();
   window.addEventListener("resize", resizeObserver);
   scene.onBeforeRenderObservable.add(() => world.update(scene.getEngine().getDeltaTime() / 1000));
@@ -96,7 +62,6 @@ export async function createGameScene(engine: Engine, _canvas: HTMLCanvasElement
     dispose() {
       window.removeEventListener("resize", resizeObserver);
       world.dispose();
-      post.dispose(camera);
       scene.dispose();
     },
   };

@@ -366,6 +366,7 @@ export class GameWorld {
     sand.diffuseTexture = sandTexture;
     sand.diffuseColor = terrainTone.sand;
     sand.specularColor = Color3.Black();
+    sand.emissiveColor = terrainTone.sand.scale(0.08); // Subtle glow for 16-bit warmth
     this.materials.sand = sand;
 
     (Object.keys(terrainTone) as TerrainKind[]).forEach((kind) => {
@@ -373,6 +374,7 @@ export class GameWorld {
       const material = new StandardMaterial(`${kind}-mat`, this.scene);
       material.diffuseColor = terrainTone[kind];
       material.specularColor = Color3.Black();
+      material.emissiveColor = terrainTone[kind].scale(0.05); // Slight emissive for depth
       this.materials[kind] = material;
     });
   }
@@ -415,35 +417,85 @@ export class GameWorld {
     rustMat.diffuseTexture = rustTexture;
     rustMat.diffuseColor = Color3.FromHexString("#A64F2D");
     rustMat.specularColor = Color3.Black();
+    rustMat.emissiveColor = Color3.FromHexString("#A64F2D").scale(0.12); // Warm rusty glow
     const black = this.makeMaterial("convoy-black", "#25231E");
     const canvas = this.makeMaterial("convoy-canvas", "#BCAD82");
     const water = this.makeMaterial("convoy-water", "#2C7D88");
 
+    // Lead hauler with more detailed 16-bit styling
     const hauler = MeshBuilder.CreateBox("lead-hauler", { width: 0.82, height: 0.38, depth: 1.05 }, this.scene);
     hauler.position = new Vector3(0, 0.38, 0.35);
     hauler.material = rustMat;
     hauler.parent = this.convoy;
+    
+    // Add cab with slight angle for better silhouette
     const cab = MeshBuilder.CreateBox("hauler-cab", { width: 0.74, height: 0.34, depth: 0.38 }, this.scene);
     cab.position = new Vector3(0, 0.64, 0.73);
     cab.material = black;
     cab.parent = this.convoy;
+    
+    // Add exhaust pipe detail (16-bit era attention to small details)
+    const exhaust = MeshBuilder.CreateCylinder("exhaust-pipe", { height: 0.28, diameterTop: 0.04, diameterBottom: 0.06, tessellation: 6 }, this.scene);
+    exhaust.position = new Vector3(0.32, 0.58, 0.15);
+    exhaust.material = black;
+    exhaust.parent = this.convoy;
+    
+    // Headlight detail
+    const headlight = MeshBuilder.CreateBox("headlight", { width: 0.18, height: 0.08, depth: 0.02 }, this.scene);
+    headlight.position = new Vector3(0, 0.42, 0.92);
+    const lightMat = this.makeMaterial("headlight-mat", "#FFD890");
+    lightMat.emissiveColor = Color3.FromHexString("#FFD890").scale(0.4);
+    headlight.material = lightMat;
+    headlight.parent = this.convoy;
+    
     this.addWheels(this.convoy, 0.44, 0.35, black);
 
+    // Cargo wagon with canvas cover
     const wagon = MeshBuilder.CreateBox("cargo-wagon", { width: 0.76, height: 0.3, depth: 0.78 }, this.scene);
     wagon.position = new Vector3(0, 0.3, -0.68);
     wagon.material = rustMat;
     wagon.parent = this.convoy;
+    
     const canopy = MeshBuilder.CreateBox("wagon-canopy", { width: 0.8, height: 0.36, depth: 0.68 }, this.scene);
     canopy.position = new Vector3(0, 0.58, -0.68);
     canopy.material = canvas;
     canopy.parent = this.convoy;
+    
+    // Wagon wheel reinforcement rings
+    const ringMat = this.makeMaterial("ring-mat", "#4A4640");
+    const ringLeft = MeshBuilder.CreateTorus("wagon-ring-left", { diameter: 0.12, thickness: 0.02, tessellation: 8 }, this.scene);
+    ringLeft.rotation.z = Math.PI / 2;
+    ringLeft.position = new Vector3(-0.42, 0.3, -0.68);
+    ringLeft.material = ringMat;
+    ringLeft.parent = this.convoy;
+    const ringRight = MeshBuilder.CreateTorus("wagon-ring-right", { diameter: 0.12, thickness: 0.02, tessellation: 8 }, this.scene);
+    ringRight.rotation.z = Math.PI / 2;
+    ringRight.position = new Vector3(0.42, 0.3, -0.68);
+    ringRight.material = ringMat;
+    ringRight.parent = this.convoy;
+    
     this.addWheels(this.convoy, 0.32, -0.68, black);
 
+    // Water trailer with tank bands
     const trailer = MeshBuilder.CreateCylinder("water-trailer", { height: 0.65, diameter: 0.44, tessellation: 8 }, this.scene);
     trailer.rotation.z = Math.PI / 2;
     trailer.position = new Vector3(0, 0.34, -1.32);
     trailer.material = water;
     trailer.parent = this.convoy;
+    
+    // Tank support bands
+    const bandMat = this.makeMaterial("tank-band", "#3A3835");
+    const band1 = MeshBuilder.CreateTorus("tank-band-1", { diameter: 0.46, thickness: 0.03, tessellation: 8 }, this.scene);
+    band1.rotation.z = Math.PI / 2;
+    band1.position = new Vector3(0, 0.34, -1.45);
+    band1.material = bandMat;
+    band1.parent = this.convoy;
+    const band2 = MeshBuilder.CreateTorus("tank-band-2", { diameter: 0.46, thickness: 0.03, tessellation: 8 }, this.scene);
+    band2.rotation.z = Math.PI / 2;
+    band2.position = new Vector3(0, 0.34, -1.19);
+    band2.material = bandMat;
+    band2.parent = this.convoy;
+    
     this.addWheels(this.convoy, 0.23, -1.32, black);
     this.convoy.getChildMeshes().forEach((mesh) => (mesh.isPickable = false));
   }
@@ -461,17 +513,43 @@ export class GameWorld {
   private createRaiders() {
     const black = this.makeMaterial("raider-black", "#24221F");
     const red = this.makeMaterial("raider-red", "#A33D31");
+    const rust = this.makeMaterial("raider-rust", "#8B5A3C");
+    
     [[7, 5], [6, 5], [7, 4]].forEach(([col, row], index) => {
       const root = new TransformNode(`raider-${index}`, this.scene);
       const point = this.gridToWorld({ col, row });
       root.position = new Vector3(point.x + (index - 1) * 0.18, 0.18, point.z + 0.18);
+      
+      // Bike body with angled design for aggressive silhouette
       const bike = MeshBuilder.CreateBox(`raider-bike-${index}`, { width: 0.38, height: 0.22, depth: 0.58 }, this.scene);
       bike.material = black;
       bike.parent = root;
+      
+      // Handlebars detail
+      const handlebar = MeshBuilder.CreateCylinder(`handlebar-${index}`, { height: 0.28, diameter: 0.04, tessellation: 6 }, this.scene);
+      handlebar.rotation.x = Math.PI / 2;
+      handlebar.position = new Vector3(0, 0.28, 0.32);
+      handlebar.material = rust;
+      handlebar.parent = root;
+      
+      // Engine block accent
+      const engine = MeshBuilder.CreateBox(`engine-${index}`, { width: 0.18, height: 0.12, depth: 0.14 }, this.scene);
+      engine.position = new Vector3(0, 0.14, 0.08);
+      engine.material = rust;
+      engine.parent = root;
+      
+      // Flag pole
+      const pole = MeshBuilder.CreateCylinder(`flag-pole-${index}`, { height: 0.52, diameter: 0.03, tessellation: 6 }, this.scene);
+      pole.position = new Vector3(-0.12, 0.32, -0.18);
+      pole.material = rust;
+      pole.parent = root;
+      
+      // Tattered flag
       const flag = MeshBuilder.CreateBox(`raider-flag-${index}`, { width: 0.05, height: 0.46, depth: 0.05 }, this.scene);
-      flag.position.y = 0.28;
+      flag.position = new Vector3(-0.12, 0.52, -0.18);
       flag.material = red;
       flag.parent = root;
+      
       root.getChildMeshes().forEach((mesh) => { mesh.isPickable = false; this.raiderMeshes.push(mesh); });
     });
   }
@@ -488,6 +566,17 @@ export class GameWorld {
       rock.material = material;
       rock.isPickable = false;
     }
+    
+    // Add smaller debris rocks for 16-bit detail
+    const debrisMat = this.makeMaterial(`debris-mat-${tile.col}-${tile.row}`, ruined ? "#6B4632" : "#5A463C");
+    for (let d = 0; d < 4; d += 1) {
+      const debris = MeshBuilder.CreateIcoSphere(`debris-${tile.col}-${tile.row}-${d}`, { radius: 0.06 + Math.random() * 0.05, subdivisions: 1 }, this.scene);
+      debris.scaling.y = 0.5 + Math.random() * 0.4;
+      debris.position = new Vector3(point.x + (Math.random() - 0.5) * 0.5, 0.05, point.z + (Math.random() - 0.5) * 0.5);
+      debris.rotation = new Vector3(Math.random(), Math.random(), 0);
+      debris.material = debrisMat;
+      debris.isPickable = false;
+    }
   }
 
   private addCliff(tile: Tile) {
@@ -498,6 +587,16 @@ export class GameWorld {
     cliff.position = new Vector3(point.x, 0.55, point.z);
     cliff.material = material;
     cliff.isPickable = false;
+    
+    // Add cliff edge details
+    const edgeMat = this.makeMaterial(`cliff-edge-${tile.col}-${tile.row}`, "#5A483D");
+    for (let e = 0; e < 3; e += 1) {
+      const edge = MeshBuilder.CreateBox(`cliff-edge-${tile.col}-${tile.row}-${e}`, { width: 0.15, height: 0.08, depth: 0.12 }, this.scene);
+      edge.position = new Vector3(point.x + (e - 1) * 0.18, 0.35 + e * 0.06, point.z + 0.25);
+      edge.rotation = new Vector3(0.2, (e - 1) * 0.3, 0);
+      edge.material = edgeMat;
+      edge.isPickable = false;
+    }
   }
 
   private addOasis(tile: Tile) {

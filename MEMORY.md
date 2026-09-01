@@ -17,3 +17,7 @@
 ## Visual Review Finding
 
 The first preview showed only a desert-colored canvas rather than the expected world and HUD. The review reinforces the selected field-manual approach and specifically requires the diagonal route, hard dossier panels, Signal Petrol marker, and custom CARAVAN lockup to be unmistakable in the opening state. The next pass explicitly assigns an active camera and adds a visible startup diagnostic if game construction rejects.
+
+## GitHub Branch Run
+
+The user-provided `enhancing-artistic-details-044ee` branch points to commit `02e69dd` and changes only `.gitignore`, `client/src/game/GameWorld.ts`, `client/src/game/scene.ts`, and `package-lock.json` relative to the stable checkpoint. Its richer GameWorld detail pass was integrated selectively into the stable project. The branch’s custom post-process shader caused WebGL fragment/vertex compiler errors in the preview, so that shader was removed while retaining the upgraded geometry/material detail. A fresh browser navigation to the active preview then showed the isometric world, HUD, route, and detailed landmarks rendering correctly.
