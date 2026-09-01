@@ -23,6 +23,8 @@ Effect.ShadersStore.caravanDitherFragmentShader = `
   varying vec2 vUV;
   uniform sampler2D textureSampler;
   uniform vec2 screenSize;
+  
+  // 4x4 Bayer matrix for ordered dithering
   float bayer(vec2 p) {
     vec2 q = mod(floor(p), 4.0);
     float i = q.x + q.y * 4.0;
@@ -33,12 +35,34 @@ Effect.ShadersStore.caravanDitherFragmentShader = `
     values[12]=15.0; values[13]=7.0; values[14]=13.0; values[15]=5.0;
     return values[int(i)] / 16.0;
   }
+  
+  // 16-bit color palette reduction (5-6-5 RGB)
+  vec3 reduceTo16Bit(vec3 color) {
+    // Quantize to 5 bits for R/B, 6 bits for G (classic 16-bit color depth)
+    vec3 levels = vec3(31.0, 63.0, 31.0);
+    return floor(color * levels + 0.5) / levels;
+  }
+  
   void main(void) {
-    vec2 steppedUv = floor(vUV * screenSize / 2.0) * 2.0 / screenSize;
+    // Pixelation: render at 1/4 resolution for chunky 16-bit pixels
+    vec2 pixelSize = 4.0 / screenSize;
+    vec2 steppedUv = floor(vUV / pixelSize) * pixelSize;
+    
     vec4 color = texture2D(textureSampler, steppedUv);
-    float noise = (bayer(gl_FragCoord.xy) - 0.5) / 18.0;
-    color.rgb = floor(clamp(color.rgb + noise, 0.0, 1.0) * 7.0) / 7.0;
-    gl_FragColor = color;
+    
+    // Apply dithering noise
+    float noise = (bayer(gl_FragCoord.xy) - 0.5) / 8.0;
+    
+    // Reduce color palette with dithering
+    vec3 ditheredColor = color.rgb + noise;
+    ditheredColor = reduceTo16Bit(ditheredColor);
+    
+    // Subtle scanline effect (every other line slightly darker)
+    float scanline = 1.0 - 0.03 * sin(gl_FragCoord.y * 3.14159);
+    ditheredColor *= scanline;
+    
+    // Clamp final color
+    gl_FragColor = vec4(clamp(ditheredColor, 0.0, 1.0), color.a);
   }
 `;
 
