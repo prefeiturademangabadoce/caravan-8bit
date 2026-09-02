@@ -1,4 +1,5 @@
 // Salt-Scoured Field Manual world: faceted ground and curt event reports make each tile feel like a real expedition choice.
+// Campaign Mode: Procedural terrain, persistent villains, scars, and consequences across deliveries.
 
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
@@ -14,7 +15,10 @@ import { Scene } from "@babylonjs/core/scene";
 import { assets } from "./assets";
 import { HudController } from "./HudController";
 import { InputManager } from "./InputManager";
-import type { CaravanState, Encounter, GamePhase, GridPoint, HudSnapshot, Landmark, TerrainKind, Tile } from "./types";
+import type { CaravanState, Encounter, GamePhase, GridPoint, HudSnapshot, Landmark, TerrainKind, Tile, CampaignConfig } from "./types";
+import { generateProceduralMap, generateEncounterPoints, getEncounterDescription } from "./terrainGenerator";
+import type { CampaignRecord, Scar, Villain } from "./campaign";
+import { INITIAL_CAMPAIGN, earnScar, spawnVillain, updateVillainGrudge, trackChoice, createFaction } from "./campaign";
 
 const MAP_WIDTH = 12;
 const MAP_HEIGHT = 10;
@@ -45,7 +49,7 @@ interface PendingMove {
 }
 
 export class GameWorld {
-  private readonly map = this.buildMap();
+  private map: Tile[][] = [];
   private readonly materials: Partial<Record<TerrainKind, StandardMaterial>> = {};
   private readonly routeMarkers: Mesh[] = [];
   private readonly raiderMeshes: AbstractMesh[] = [];
@@ -66,8 +70,17 @@ export class GameWorld {
   private demoIndex = 0;
   private readonly demoMode = new URLSearchParams(window.location.search).has("demo");
   private readonly log: string[] = ["Dusthook disappears behind the convoy. Watergate signal is holding." ];
-
+  
+  // Campaign state
+  private campaignConfig: CampaignConfig;
+  private campaignRecord: CampaignRecord = { ...INITIAL_CAMPAIGN };
+  private activeVillains: Villain[] = [];
+  private currentScar: Scar | null = null;
+  private encounterPoints: Array<{ col: number; row: number; type: string; triggered: boolean }> = [];
+  private destination!: GridPoint;
+  
   constructor(private readonly scene: Scene) {
+    this.campaignConfig = this.parseCampaignConfig();
     this.createMaterials();
     this.createTerrain();
     this.createConvoy();
@@ -176,7 +189,71 @@ export class GameWorld {
   }
 
   restart() {
-    this.state = this.makeInitialState();
+    if (this.campaignConfig.enabled) {
+      // Start next delivery in campaign
+      this.startNextDelivery();
+    } else {
+      // Classic single-run restart
+      this.state = this.makeInitialState();
+      this.phase = "travel";
+      this.encounter = null;
+      this.pendingMove = null;
+      this.stormTurns = 0;
+      this.raidersResolved = false;
+      this.cacheClaimed = false;
+      this.oasisTraded = false;
+      this.log.splice(0, this.log.length, "New manifest loaded. Dusthook gate is open.");
+      this.moveConvoyTo(this.state.position);
+      this.createRouteMarkers();
+      this.renderHud();
+    }
+  }
+  
+  private startNextDelivery() {
+    // Calculate trauma from this delivery for scar generation
+    const traumaLevel = Math.max(
+      100 - this.state.health,
+      (this.state.steps > 20 ? 20 : 0),
+      this.state.morale < 30 ? 30 : 0
+    );
+    
+    // Potentially earn a scar
+    const newScar = earnScar(this.campaignConfig.deliveryNumber, traumaLevel);
+    if (newScar) {
+      this.campaignRecord.scars.push(newScar);
+      this.currentScar = newScar;
+      this.report(`CAMPION SCAR: ${newScar.name} - ${newScar.description}`);
+    }
+    
+    // Update campaign record
+    this.campaignRecord.deliveriesCompleted += 1;
+    this.campaignRecord.totalCargoDelivered += this.cargoValue();
+    this.campaignRecord.lastDeliveryDay = this.state.day;
+    
+    // Advance to next delivery
+    this.campaignConfig = {
+      ...this.campaignConfig,
+      deliveryNumber: this.campaignConfig.deliveryNumber + 1,
+      seed: this.campaignConfig.seed + 1000, // New seed for new terrain
+    };
+    
+    // Regenerate the world
+    this.regenerateWorld();
+    
+    this.report(`Delivery ${this.campaignConfig.deliveryNumber} begins. The desert stretches ahead.`);
+  }
+  
+  private regenerateWorld() {
+    const { map, start, destination } = generateProceduralMap(this.campaignConfig);
+    this.map = map;
+    this.destination = destination;
+    
+    // Generate encounter points for this map
+    this.encounterPoints = generateEncounterPoints(map, this.campaignConfig.deliveryNumber, this.campaignConfig.seed)
+      .map(p => ({ ...p, triggered: false }));
+    
+    // Reset state for new delivery
+    this.state = this.makeCampaignInitialState(start);
     this.phase = "travel";
     this.encounter = null;
     this.pendingMove = null;
@@ -184,10 +261,47 @@ export class GameWorld {
     this.raidersResolved = false;
     this.cacheClaimed = false;
     this.oasisTraded = false;
-    this.log.splice(0, this.log.length, "New manifest loaded. Dusthook gate is open.");
+    
+    // Rebuild terrain meshes
+    this.disposeTerrain();
+    this.createTerrain();
     this.moveConvoyTo(this.state.position);
     this.createRouteMarkers();
-    this.renderHud();
+  }
+  
+  private makeCampaignInitialState(start: GridPoint): CaravanState {
+    // Apply scar effects to initial state
+    let startingHealth = 100;
+    let startingMorale = 78;
+    
+    this.campaignRecord.scars.forEach(scar => {
+      if (scar.name === "Hull Patchwork") startingHealth -= 10;
+      if (scar.name === "Crew Lost") startingMorale -= 10;
+    });
+    
+    return {
+      position: start,
+      fuel: 16,
+      water: 14,
+      food: 8,
+      parts: 4,
+      morale: Math.max(10, startingMorale),
+      health: Math.max(20, startingHealth),
+      day: 1,
+      cargo: { food: 3, scrap: 6, medicine: 2, tech: 1 },
+      weather: "CLEAR",
+      steps: 0,
+    };
+  }
+  
+  private disposeTerrain() {
+    // Dispose of existing terrain meshes
+    this.map.flat().forEach(tile => {
+      const mesh = this.scene.getMeshByName(`tile-${tile.col}-${tile.row}`);
+      if (mesh) mesh.dispose();
+    });
+    this.routeMarkers.forEach(mesh => mesh.dispose());
+    this.routeMarkers.length = 0;
   }
 
   private updateMovement(delta: number) {
@@ -219,6 +333,7 @@ export class GameWorld {
 
     if (this.state.water <= 0 || this.state.health <= 0) {
       this.phase = "failed";
+      this.campaignRecord.convoysLost += 1;
       this.report("The convoy cannot sustain another mile. The run ends in the open desert.");
       this.renderHud();
       return;
@@ -228,6 +343,10 @@ export class GameWorld {
       this.phase = "arrived";
       this.state.morale = Math.min(100, this.state.morale + 12);
       this.report(`Watergate docks receive ${this.cargoValue().toLocaleString()} credits of surviving cargo. Delivery verified.`);
+      
+      // Check for villain encounters based on campaign progress
+      this.checkVillainEncounters();
+      
       this.renderHud();
       return;
     }
@@ -239,7 +358,11 @@ export class GameWorld {
       this.report("A buried survey cache yields two parts and a sealed medical case.");
     }
 
-    if (!this.raidersResolved && this.isRaiderZone(this.state.position)) {
+    // Check for procedural encounters
+    this.checkProceduralEncounter(tile);
+
+    // Legacy raider zone check (for non-campaign mode)
+    if (!this.campaignConfig.enabled && !this.raidersResolved && this.isRaiderZone(this.state.position)) {
       this.phase = "encounter";
       this.encounter = {
         title: "RIDGE RAIDERS",
@@ -254,6 +377,55 @@ export class GameWorld {
     this.advanceWeather();
     this.createRouteMarkers();
     this.renderHud();
+  }
+  
+  private checkProceduralEncounter(tile: Tile) {
+    if (!this.campaignConfig.enabled) return;
+    
+    const encounterPoint = this.encounterPoints.find(
+      p => p.col === tile.col && p.row === tile.row && !p.triggered
+    );
+    
+    if (encounterPoint) {
+      encounterPoint.triggered = true;
+      const description = getEncounterDescription(encounterPoint.type, this.campaignConfig.seed + tile.col + tile.row);
+      
+      this.phase = "encounter";
+      this.encounter = {
+        ...description,
+        type: encounterPoint.type,
+        encounterId: `${encounterPoint.type}_${tile.col}_${tile.row}`,
+      };
+      this.report(this.encounter.report);
+    }
+  }
+  
+  private checkVillainEncounters() {
+    // Chance for villain to appear based on grudge level
+    const activeVillain = this.activeVillains.find(v => v.grudge >= 60 && Math.random() < 0.3);
+    
+    if (activeVillain) {
+      this.phase = "encounter";
+      this.encounter = {
+        title: activeVillain.name.toUpperCase(),
+        report: `${activeVillain.title} ${activeVillain.name} blocks your path! "${this.getRandomVillainTaunt(activeVillain)}"`,
+        threat: activeVillain.threat === "legendary" ? 5 : activeVillain.threat === "severe" ? 4 : 3,
+        type: "villain",
+        encounterId: `villain_${activeVillain.id}`,
+      };
+      this.report(this.encounter.report);
+    }
+  }
+  
+  private getRandomVillainTaunt(villain: Villain): string {
+    const taunts = [
+      "The desert remembers what you did.",
+      "Your luck runs out today, caravan-master.",
+      "I've been waiting for this moment.",
+      "The sands will drink deep today.",
+      "No more running. We end this now.",
+    ];
+    return taunts[Math.floor(Math.random() * taunts.length)];
   }
 
   private resolveEncounter(message: string) {
@@ -715,6 +887,21 @@ export class GameWorld {
 
   private isRaiderZone(point: GridPoint) {
     return (point.col === 7 && point.row === 5) || (point.col === 6 && point.row === 5);
+  }
+  
+  private parseCampaignConfig(): CampaignConfig {
+    const params = new URLSearchParams(window.location.search);
+    const enabled = params.has("campaign");
+    const deliveryNumber = parseInt(params.get("delivery") || "1", 10);
+    const seed = parseInt(params.get("seed") || String(Math.floor(Math.random() * 10000)), 10);
+    const difficultyParam = params.get("difficulty") as "easy" | "normal" | "hard" | null;
+    
+    return {
+      enabled,
+      deliveryNumber,
+      seed,
+      difficulty: difficultyParam ?? "normal",
+    };
   }
 
   private buildMap(): Tile[][] {
