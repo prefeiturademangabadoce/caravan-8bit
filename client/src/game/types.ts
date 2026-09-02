@@ -41,6 +41,8 @@ export interface Encounter {
   title: string;
   report: string;
   threat: number;
+  type?: string; // For procedural encounters
+  encounterId?: string; // Unique ID for tracking
 }
 
 export interface HudSnapshot {
@@ -54,5 +56,15 @@ export interface HudSnapshot {
   cargoWeight: number;
   routeDistance: number;
   canTrade: boolean;
+  // Campaign fields
+  deliveryNumber?: number;
+  campaignActive?: boolean;
+}
+
+export interface CampaignConfig {
+  enabled: boolean;
+  deliveryNumber: number;
+  seed: number;
+  difficulty: "easy" | "normal" | "hard";
 }
 
